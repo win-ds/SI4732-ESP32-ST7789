@@ -390,13 +390,14 @@ void showStatus()
   Serial.print("dB Signal:");
   Serial.print(rx.getCurrentRSSI()); // 信号强度
   Serial.println("dBuV]");
-  Serial.println(rx.isAgcEnabled());
+
 }
 
 // 显示指定频率（AM或FM）- 修改版：同时更新屏幕
 void showFrequency(uint16_t freq)
 {
   // 参数说明：freq为需要显示的频率值，FM时单位为100Hz，AM时单位为kHz
+  rx.getCurrentReceivedSignalQuality(); // 获取当前信号质量
   if (freq == 0)
     freq = rx.getFrequency(); // 用 getFrequency 兜底
   // 原有串口输出
@@ -406,37 +407,45 @@ void showFrequency(uint16_t freq)
     Serial.println(" MHz");
     // 添加屏幕更新
     uiSetFreqFM(freq / 100.0);
+    uiSetRSSI(rx.getCurrentRSSI());
+    uiSetSNR(rx.getCurrentSNR());
   }
   else
   {
     Serial.print(freq);
     Serial.println(" kHz");
-    // 添加屏幕更新
     uiSetFreqAM(freq);
+    uiSetRSSI(rx.getCurrentRSSI());
+    uiSetSNR(rx.getCurrentSNR());
+  }
+  Serial.print("RSSI:");
+  Serial.println(rx.getCurrentRSSI());
+  Serial.print("SNR:");
+  Serial.println(rx.getCurrentSNR());
+}
+
+
+void prepareSeek()
+{
+  if (rx.isCurrentTuneFM())
+  {
+
+    rx.setSeekFmLimits(6400, 10800); // 64.00 ~ 108.00 MHz
+    rx.setSeekFmSpacing(1);         // 100 kHz 步进
+    rx.setSeekFmRssiThreshold(20);   // RSSI 20 dBuV
+    rx.setMaxSeekTime(300000);        // 最大寻台时间 1000ms
+  }
+  else
+  {
+    rx.setSeekAmLimits(520, 1710); // 520 ~ 1710 kHz
+    rx.setSeekAmSpacing(10);       // 10 kHz 步进
+    rx.setSeekAmRssiThreshold(0);  // RSSI 30 dBuV
+    rx.setMaxSeekTime(300000);      // 最大寻台时间 1000ms// 保持与你 setFM 的范围和步进一致
   }
 }
 
-void prepareSeekFM()
-{
-  // 保持与你 setFM 的范围和步进一致
-  rx.setSeekFmLimits(8400, 10800); // 84.00 ~ 108.00 MHz
-  rx.setSeekFmSpacing(10);         // 100 kHz 步进
-  // 设置通用阈值（RSSI/SNR），数值越低越容易前进
-  rx.setSeekFmRssiThreshold(10); // RSSI 20 dBuV
-  rx.setMaxSeekTime(10000);     // 最大寻台时间 1000ms
-}
-
-void prepareSeekAM()
-{
-  // 保持与你 setAM 的范围和步进一致
-  rx.setSeekAmLimits(520, 1710); // 520 ~ 1710 kHz
-  rx.setSeekAmSpacing(10);       // 10 kHz 步进
-  rx.setSeekAmRssiThreshold(0);  // RSSI 30 dBuV
-  rx.setMaxSeekTime(10000);      // 最大寻台时间 1000ms
-}
-
 /**
- * @brief 改进的搜台功能
+ * @brief 改进S的搜台功能
  * @param seekUp true=向上搜台，false=向下搜台
  * @param progressCallback 进度回调函数，显示当前搜台频率
  * @return true=找到电台，false=未找到
@@ -604,19 +613,24 @@ void checkEncoder(uint8_t mode)
     // 模式1：FM调频（如果当前不是FM先切换）
     if (!rx.isCurrentTuneFM())
     {
-      rx.setFM(8400, 10800, 9650, 10);
+      rx.setFM(6400, 10800, 9650, 10);
       Serial.println("Auto switched to FM");
     }
 
     int cur = (int)rx.getCurrentFrequency();
     int target = cur + (int)(detents * 10); // FM步进10=100kHz
-    target = constrain(target, 8400, 10800);
+    target = constrain(target, 8600, 10800);
 
     if (target != cur)
     {
       rx.setFrequency((uint16_t)target);
       uiSetFreqFM(target / 100.0);
       Serial.printf("FM: %d -> %d (detents=%ld)\n", cur, target, detents);
+      rx.getCurrentReceivedSignalQuality();
+      Serial.print("Signal Quality: ");
+      Serial.println(rx.getCurrentSNR());
+      Serial.print("RSSI: ");
+      Serial.println(rx.getCurrentRSSI());
     }
   }
   else if (mode == 2)
@@ -637,6 +651,11 @@ void checkEncoder(uint8_t mode)
       rx.setFrequency((uint16_t)target);
       uiSetFreqAM(target);
       Serial.printf("AM: %d -> %d (detents=%ld)\n", cur, target, detents);
+      rx.getCurrentReceivedSignalQuality();
+      Serial.print("Signal Quality: ");
+      Serial.println(rx.getCurrentSNR());
+      Serial.print("RSSI: ");
+      Serial.println(rx.getCurrentRSSI());
     }
   }
 
@@ -708,10 +727,10 @@ void setup()
   rx.setVolume(45);                                                // 设置音量
   initEncoder();                                                   // 初始化编码器，音量初始值45
   showStatus();                                                    // 显示当前状态
-  Serial.print("时钟频率:");
-  Serial.println(rx.getProperty(0x0201));
-  Serial.print("音量:");
-  Serial.println(rx.getProperty(0x4000));
+  // Serial.print("时钟频率:");
+  // Serial.println(rx.getProperty(0x0201));
+  // Serial.print("音量:");
+  // Serial.println(rx.getProperty(0x4000));
   // 界面初始化
   uiDrawStatic();
 
@@ -741,10 +760,8 @@ void setup()
   uiSetVolume(lastVolume);
   encoderMode = 0;               // 默认处于encoder处于音量调节
   uiSetEncoderMode(encoderMode); // 显示初始模式
-  Serial.println("时钟频率");
-  Serial.println(rx.getProperty(0x0201));
-  rx.setFmSoftMuteMaxAttenuation(0);
 
+  rx.setFmSoftMuteMaxAttenuation(0);
 
   uint16_t digitalFormat = rx.getProperty(0x0102);
   if (digitalFormat == 0x0000)
@@ -766,8 +783,8 @@ void loop()
   uint8_t currentSNR;
   bool currentIsFM;
   bool currentStereo;
-  static int lastSteadyState = HIGH;        // 上次稳定状态
-  static int lastFlickerableState = HIGH;   // 上次读取状态
+  static int lastSteadyState = HIGH;      // 上次稳定状态
+  static int lastFlickerableState = HIGH; // 上次读取状态
   static unsigned long lastDebounceTime = 0;
   const int debounceDelay = 20;
 
@@ -775,49 +792,52 @@ void loop()
   int currentState = digitalRead(encoderSW);
 
   // 如果当前读取状态与上次读取状态不同，重置防抖计时器
-  if (currentState != lastFlickerableState) {
+  if (currentState != lastFlickerableState)
+  {
     lastDebounceTime = millis();
     lastFlickerableState = currentState;
   }
 
   // 如果当前状态稳定超过防抖时间
-  if ((millis() - lastDebounceTime) > debounceDelay) {
+  if ((millis() - lastDebounceTime) > debounceDelay)
+  {
     // 检测边沿：从LOW变成HIGH（按键释放）
-    if (lastSteadyState == LOW && currentState == HIGH) {
+    if (lastSteadyState == LOW && currentState == HIGH)
+    {
       // 这里才是真正的 LOW -> HIGH 边沿触发
       encoderMode = (encoderMode + 1) % 3;
 
       Serial.print("Button released - Encoder mode: ");
-      if (encoderMode == 0)      Serial.println("Volume");
-      else if (encoderMode == 1) Serial.println("FM Frequency");
-      else                       Serial.println("AM Frequency");
+      if (encoderMode == 0)
+        Serial.println("Volume");
+      else if (encoderMode == 1)
+        Serial.println("FM Frequency");
+      else
+        Serial.println("AM Frequency");
 
       // 立即切换波段
-      if (encoderMode == 1 && !rx.isCurrentTuneFM()) {
+      if (encoderMode == 1 && !rx.isCurrentTuneFM())
+      {
         rx.setFM(8400, 10800, 9650, 10);
         Serial.println("Auto switched to FM");
 
-        Serial.print("isAgcEnabled?");
-        Serial.println(rx.isAgcEnabled());
-        Serial.print("AgcGainIndex");
-        Serial.println(rx.getAgcGainIndex());
-
+        // Serial.print("isAgcEnabled?");
+        // Serial.println(rx.isAgcEnabled());
+        // Serial.print("AgcGainIndex");
+        // Serial.println(rx.getAgcGainIndex());
       }
-      else if (encoderMode == 2 && rx.isCurrentTuneFM()) {
+      else if (encoderMode == 2 && rx.isCurrentTuneFM())
+      {
         rx.setAM(520, 1710, 1000, 10);
         Serial.println("Auto switched to AM");
       }
 
       uiSetEncoderMode(encoderMode);
     }
-    
+
     // 更新稳定状态（在边沿检测之后）
     lastSteadyState = currentState;
   }
-
-
-
-
 
   checkEncoder(encoderMode);
 
@@ -827,15 +847,11 @@ void loop()
   currentVol = rx.getCurrentVolume();
   currentRSSI = rx.getCurrentRSSI();
   currentSNR = rx.getCurrentSNR();
-//  currentRSSI = 5;
-  //currentSNR = 10;
-
 
   currentIsFM = rx.isCurrentTuneFM();
   currentStereo = currentIsFM ? rx.getCurrentPilot() : false;
 
-
-    // 只在状态真正改变时才更新UI（避免闪屏）
+  // 只在状态真正改变时才更新UI（避免闪屏）
   if (currentIsFM != lastIsFM)
   {
     uiSetBand(currentIsFM);
@@ -912,7 +928,7 @@ void loop()
       if (!rx.isCurrentTuneFM()) // 仅在AM模式下有效
       {
         if (bandwidthIdx > 6)
-          bandwidthIdx = 0;               // 循环带宽参数
+        bandwidthIdx = 0;               // 循环带宽参数
         rx.setBandwidth(bandwidthIdx, 1); // 设置带宽（带宽索引，自动增益=1）
         Serial.print("AM Filter: ");
         Serial.print(bandwidth[bandwidthIdx]);
@@ -921,28 +937,14 @@ void loop()
       }
       break;
     case 'S': // 自动搜台（向上）- 现在会同时更新屏幕
-      if (rx.isCurrentTuneFM())
-      {
-        prepareSeekFM();
-      }
-      else
-      {
-        prepareSeekAM();
-      }
-      customSeekStation(1, showFrequency);
-      //        rx.seekStationProgress(showFrequency, 1);
+      prepareSeek();
+//      customSeekStation(1, showFrequency);
+      rx.seekStationProgress(showFrequency, 1);
       break;
     case 's': // 自动搜台（向下）- 现在会同时更新屏幕
-      if (rx.isCurrentTuneFM())
-      {
-        prepareSeekFM();
-      }
-      else
-      {
-        prepareSeekAM();
-      }
-      customSeekStation(0, showFrequency);
-      //        rx.seekStationProgress(showFrequency, 0);
+      prepareSeek();
+//      customSeekStation(0, showFrequency);
+      rx.seekStationProgress(showFrequency, 0);
       break;
     case '0': // 显示当前状态
       showStatus();
@@ -955,6 +957,5 @@ void loop()
     }
   }
 
-  delay(10);
+  delay(20);
 }
-
